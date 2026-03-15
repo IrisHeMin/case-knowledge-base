@@ -5,20 +5,61 @@ permalink: /deep-dive/
 ---
 
 <h2>📖 Deep Dive</h2>
-<p class="page-description">In-depth technical analysis covering network protocols, Windows cluster architecture, performance methodology, and systematic knowledge consolidation.</p>
+<p class="page-description">In-depth technical analysis covering network protocols, cluster architecture, performance methodology, and debugging techniques. Select a topic to explore.</p>
 
-<ul class="post-list">
-  {% for post in site.posts %}
-    {% if post.path contains "deep-dive/" %}
-    <li class="post-list-item">
-      <h2><a href="{{ post.url | relative_url }}">{{ post.title }}</a></h2>
-      <div class="post-list-meta">
-        📅 {{ post.date | date: "%Y-%m-%d" }}
-        {% if post.categories.size > 0 %}
-          &middot; 📁 {{ post.categories | join: ", " }}
-        {% endif %}
-      </div>
-    </li>
+{% assign tcpip_count = 0 %}
+{% assign proto_count = 0 %}
+{% assign cluster_count = 0 %}
+{% assign perf_count = 0 %}
+{% assign debug_count = 0 %}
+{% assign ai_count = 0 %}
+{% for post in site.posts %}
+  {% if post.path contains "deep-dive/" %}
+    {% if post.path contains "tcpip-" %}{% assign tcpip_count = tcpip_count | plus: 1 %}
+    {% elsif post.path contains "dns-" or post.path contains "smb-" %}{% assign proto_count = proto_count | plus: 1 %}
+    {% elsif post.path contains "failover-clustering" %}{% assign cluster_count = cluster_count | plus: 1 %}
+    {% elsif post.path contains "performance" or post.path contains "wpa-" %}{% assign perf_count = perf_count | plus: 1 %}
+    {% elsif post.path contains "dump-" or post.path contains "windbg-" %}{% assign debug_count = debug_count | plus: 1 %}
+    {% elsif post.path contains "ai-102" %}{% assign ai_count = ai_count | plus: 1 %}
     {% endif %}
-  {% endfor %}
-</ul>
+  {% endif %}
+{% endfor %}
+
+<section class="category-cards">
+  <a href="{{ '/deep-dive/tcpip/' | relative_url }}" class="category-card">
+    <div class="card-icon">🌐</div>
+    <h3>TCP/IP Networking</h3>
+    <p>Packet flow, routing internals, and TCP/IP stack deep dives from junior to master level</p>
+    <span class="card-count">{{ tcpip_count }} posts</span>
+  </a>
+  <a href="{{ '/deep-dive/protocols/' | relative_url }}" class="category-card">
+    <div class="card-icon">📡</div>
+    <h3>DNS & SMB</h3>
+    <p>DNS server architecture, scavenging mechanisms, and SMB protocol internals</p>
+    <span class="card-count">{{ proto_count }} posts</span>
+  </a>
+  <a href="{{ '/deep-dive/clustering/' | relative_url }}" class="category-card">
+    <div class="card-icon">🖥️</div>
+    <h3>Windows Clustering</h3>
+    <p>Failover clustering architecture, quorum, CSV, and cluster network internals</p>
+    <span class="card-count">{{ cluster_count }} posts</span>
+  </a>
+  <a href="{{ '/deep-dive/performance/' | relative_url }}" class="category-card">
+    <div class="card-icon">📊</div>
+    <h3>Performance Analysis</h3>
+    <p>CPU, memory, storage, network performance methodology, PerfMon, WPA, and toolkits</p>
+    <span class="card-count">{{ perf_count }} posts</span>
+  </a>
+  <a href="{{ '/deep-dive/debugging/' | relative_url }}" class="category-card">
+    <div class="card-icon">🔍</div>
+    <h3>Debugging & Dump Analysis</h3>
+    <p>WinDbg crash dump analysis, dump capture techniques, and debugging methodology</p>
+    <span class="card-count">{{ debug_count }} posts</span>
+  </a>
+  <a href="{{ '/deep-dive/ai/' | relative_url }}" class="category-card">
+    <div class="card-icon">🤖</div>
+    <h3>Azure AI</h3>
+    <p>AI-102 certification guide, Azure AI services, and generative AI fundamentals</p>
+    <span class="card-count">{{ ai_count }} posts</span>
+  </a>
+</section>
