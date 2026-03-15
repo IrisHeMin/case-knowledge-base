@@ -1,11 +1,11 @@
 ---
 layout: default
-title: Math Education
-permalink: /math-education/
+title: Education
+permalink: /education/
 ---
 
-<h2>📐 Math Education</h2>
-<p class="page-description">Shanghai elementary math curriculum (Grades 1–6) organized by grade and semester, ideal for review and gap identification.</p>
+<h2>📐 Education</h2>
+<p class="page-description">Learning resources organized by subject, grade, and semester. Currently featuring Shanghai elementary math curriculum — more subjects coming soon.</p>
 
 <ul class="post-list">
   {% for post in site.posts %}
