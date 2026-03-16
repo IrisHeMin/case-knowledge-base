@@ -3,6 +3,23 @@ layout: default
 ---
 <article class="post">
   <a href="javascript:history.back()" class="back-link back-top">&larr; Back to previous page</a>
+  <nav class="breadcrumb">
+    <a href="{{ '/' | relative_url }}">Home</a>
+    {% if page.path contains "case-summaries/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/case-summaries/' | relative_url }}">Case Studies</a>
+    {% elsif page.path contains "deep-dive/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/deep-dive/' | relative_url }}">Deep Dive</a>
+    {% elsif page.path contains "scenario-maps/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/scenario-maps/' | relative_url }}">Scenario Maps</a>
+    {% elsif page.path contains "ai-learning/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/ai-learning/' | relative_url }}">AI Learning</a>
+    {% elsif page.path contains "math-education/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/education/' | relative_url }}">Education</a>
+    {% elsif page.path contains "tsg/" %}
+      <span class="breadcrumb-sep">/</span><a href="{{ '/tsg/' | relative_url }}">TSG</a>
+    {% endif %}
+    <span class="breadcrumb-sep">/</span><span class="breadcrumb-current">{{ page.title }}</span>
+  </nav>
   <header class="post-header">
     <h1 class="post-title">{{ page.title }}</h1>
     <div class="post-meta">

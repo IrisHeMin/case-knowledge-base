@@ -272,6 +272,17 @@ body {
   border-color: var(--accent);
 }
 
+/* Breadcrumb */
+.breadcrumb {
+  font-size: 0.85rem;
+  color: #656d76;
+  margin-bottom: 16px;
+}
+.breadcrumb a { color: var(--accent); text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb-sep { margin: 0 6px; color: #b0b8c1; }
+.breadcrumb-current { color: var(--fg); }
+
 /* Post excerpt */
 .post-excerpt {
   margin: 4px 0 0;
