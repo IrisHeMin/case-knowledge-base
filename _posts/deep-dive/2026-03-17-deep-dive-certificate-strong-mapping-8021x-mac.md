@@ -318,12 +318,12 @@ Set-ADUser -Identity "john.smith" -Add @{
 md C:\NPSTrace
 md C:\NPSTrace\EventLogs
 
-REM === NPS / RADIUS 相关 ETL 追踪 ===
+REM === NPS / RADIUS ETL Trace ===
 logman create trace "net_nps" -ow -o C:\NPSTrace\net_nps.etl -p {B2CBF6DC-392A-43AE-98D2-1AA66DFCB2C3} 0xffffffffffffffff 0xff -nb 16 16 -bs 1024 -mode Circular -f bincirc -max 512 -ets
 logman update trace "net_nps" -p {344EB4B5-5B35-48D7-B116-28E3E3976B49} 0xffffffffffffffff 0xff -ets
 logman update trace "net_nps" -p {997590EF-d144-4d41-b7fb-7028ae295b04} 0xffffffffffffffff 0xff -ets
 
-REM === EAPHost ETL 追踪 ===
+REM === EAPHost ETL Trace ===
 logman create trace "net_eaphost" -ow -o C:\NPSTrace\net_eaphost.etl -p {40DAC86F-DD09-4B47-A112-3AE54DA2222E} 0xffffffffffffffff 0xff -nb 16 16 -bs 1024 -mode Circular -f bincirc -max 4096 -ets
 logman update trace "net_eaphost" -p "Microsoft-Windows-EapHost" 0xffffffffffffffff 0xff -ets
 
@@ -335,13 +335,13 @@ logman update trace "ds_security" -p "Microsoft-Windows-CAPI2" 0xfffffffffffffff
 REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL" /f /v EventLogging /t REG_DWORD /d 7
 wevtutil.exe set-log Microsoft-Windows-CAPI2/Operational /enabled:true
 
-REM === 网络抓包 ===
+REM === Network Packet Capture ===
 netsh trace start capture=yes tracefile=C:\NPSTrace\nettrace.etl maxsize=512 overwrite=yes report=no correlation=no
 
-echo === 日志采集已启动，请复现问题后按任意键停止 ===
+echo === Trace collection started. Reproduce the issue, then press any key to stop ===
 pause
 
-REM === 停止所有追踪 ===
+REM === Stop All Traces ===
 logman stop "net_nps" -ets
 logman stop "net_eaphost" -ets
 logman stop "ds_security" -ets
@@ -351,7 +351,7 @@ REG ADD "HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL" /f /v
 wevtutil.exe set-log Microsoft-Windows-CAPI2/Operational /enabled:false
 wevtutil.exe export-log Microsoft-Windows-CAPI2/Operational C:\NPSTrace\capi2.evtx /overwrite:true
 
-echo === 日志已保存到 C:\NPSTrace ===
+echo === Logs saved to C:\NPSTrace ===
 ```
 
 ---
