@@ -85,12 +85,14 @@ title: Home
 {% assign ai_count = 0 %}
 {% assign math_count = 0 %}
 {% assign tsg_count = 0 %}
+{% assign econ_count = 0 %}
 {% for post in site.posts %}
   {% if post.path contains "case-summaries/" %}{% assign case_count = case_count | plus: 1 %}
   {% elsif post.path contains "deep-dive/" %}{% assign deep_count = deep_count | plus: 1 %}
   {% elsif post.path contains "scenario-maps/" %}{% assign scenario_count = scenario_count | plus: 1 %}
   {% elsif post.path contains "ai-learning/" %}{% assign ai_count = ai_count | plus: 1 %}
   {% elsif post.path contains "math-education/" %}{% assign math_count = math_count | plus: 1 %}
+  {% elsif post.path contains "economics-education/" %}{% assign econ_count = econ_count | plus: 1 %}
   {% elsif post.path contains "tsg/" %}{% assign tsg_count = tsg_count | plus: 1 %}
   {% else %}
     {% if post.title contains "AI" or post.path contains "ai-102" %}{% assign ai_count = ai_count | plus: 1 %}{% endif %}
@@ -127,6 +129,12 @@ title: Home
     <h3>Education</h3>
     <p>Learning resources organized by subject, grade, and semester</p>
     <span class="card-count">{{ math_count }} posts</span>
+  </a>
+  <a href="{{ '/economics-education/' | relative_url }}" class="category-card">
+    <div class="card-icon">📊</div>
+    <h3>Economics</h3>
+    <p>Economics learning series: microeconomics, macroeconomics, from basics to advanced</p>
+    <span class="card-count">{{ econ_count }} posts</span>
   </a>
   <a href="{{ '/tsg/' | relative_url }}" class="category-card">
     <div class="card-icon">🛠️</div>
