@@ -12,7 +12,7 @@ type: "tech-sharing"
 **Product/Service:** Windows TCP/IP Routing
 **Difficulty:** ⭐⭐⭐⭐ (4/5)
 **Duration:** 约 2 小时
-**Key Technique:** ARP Cache 状态对 `IppCompareRoutes()` Reachability 判定的影响
+**Key Technique:** `IppCompareRoutes()` Reachability 判定 + 上游网关对不同目标 IP 的差异化处理
 
 ---
 
@@ -156,20 +156,16 @@ Get-NetNeighbor | Format-List * | Out-File -FilePath C:\netneighbor_detail.txt -
 
 **关键发现：** ARP Cache 中两个 IP 的状态不同：
 
-| 目标 IP | ARP Cache 状态 | tracert 下一跳 |
-|---------|---------------|---------------|
-| 10.50.6.1 | **Incomplete** | 10.20.11.15（本地接口） |
-| 10.50.135.1 | **Unreachable** | 198.51.100.2（默认路由网关） |
+| 目标 IP | ARP Cache 状态 |
+|---------|---------------|
+| 10.50.6.1 | **Incomplete** |
+| 10.50.135.1 | **Unreachable** |
 
-**推理确认：** ARP Cache 状态确实不同！而且状态的差异直接对应了 tracert 结果的差异。
+状态确实不同！但这两种"失败"状态到底对路由选择有什么影响？还需要进一步验证。
 
 ---
 
 ## 🎯 真相大白 (The Resolution)
-
-### Root Cause — "凶手"是谁？
-
-**ARP Cache 的 `Unreachable` 和 `Incomplete` 两种"失败"状态，在 Windows TCP/IP 路由选择引擎 `IppCompareRoutes()` 中被区别对待了。**
 
 ### "作案手法" — Windows 路由选择的隐藏逻辑
 
@@ -181,52 +177,48 @@ Reachability > Prefix Length > Dead Gateway > Metric > ECMP Hash
 
 注意！**Reachability（可达性）排在 Prefix Length（最长前缀）前面！**
 
-这意味着：
+不管 ARP Cache 状态是 `Incomplete` 还是 `Unreachable`，host route 对应的下一跳都**没有可用的 MAC 地址**，都算不可达。因此 `IppCompareRoutes()` 在第一轮 Reachability PK 中就**淘汰了 /32 host route**，两个 IP 最终**都走了默认路由**：
 
-**场景 A — `10.50.6.1`（ARP = Incomplete）：**
 ```
-路由候选：/32 host route via 10.20.11.15 (ARP=Incomplete)
+两个 IP 的路由选择过程完全一致：
+
+路由候选：/32 host route via 10.20.11.15 (ARP=Incomplete 或 Unreachable)
           /0  default route via 198.51.100.1
 
 PK Round 1 - Reachability:
-  /32 route: ARP=Incomplete → 系统还在尝试，没有判定为不可达 → ✅ 可参与竞选
-  /0  route: 默认网关可达 → ✅ 可参与竞选
+  /32 route: ARP 失败（不管是 Incomplete 还是 Unreachable）→ 不可达 → ❌ 淘汰
+  /0  route: 默认网关可达 → ✅ 胜出
 
-PK Round 2 - Prefix Length:
-  /32 > /0 → /32 胜出！
-
-结果：走 host route → 本地发 ARP → 无人回复 → 报告"无法访问目标主机"
+结果：两个 IP 都走默认路由 → 198.51.100.1 → 到达上游网关 198.51.100.2
 ```
 
-**场景 B — `10.50.135.1`（ARP = Unreachable）：**
-```
-路由候选：/32 host route via 10.20.11.15 (ARP=Unreachable)
-          /0  default route via 198.51.100.1
+### Root Cause — "凶手"是谁？
 
-PK Round 1 - Reachability:
-  /32 route: ARP=Unreachable → 系统已判定不可达 → ❌ 直接淘汰！
-  /0  route: 默认网关可达 → ✅ 唯一幸存者
+**真正的"凶手"不在 Windows 客户端，而在上游网关 `198.51.100.2`！**
 
-结果：走默认路由 → 198.51.100.1 → 到达上游网关 198.51.100.2
-```
-
-**用人话说：** `Incomplete` 就像一个嫌疑人"还在审讯中" — 系统不会放弃这条路径。而 `Unreachable` 就像嫌疑人"已经证明不在场" — 系统直接把这条路排除了，转而使用默认路由。
-
-### 那 tracert 结果不同的最后一环呢？
-
-网络包验证了另一层差异 — 不在 Windows 客户端，而在**上游网关 198.51.100.2**：
+网络包证实了这一点 — 两个 IP 的数据包**源地址都是 `198.51.101.22`（默认路由网卡）**，证明都走了默认路由。但上游网关对它们的处理截然不同：
 
 ```
-# 针对 10.50.6.1 — 走默认路由后，网关静默丢弃，不回复任何消息
+# 针对 10.50.6.1 — 网关静默丢弃，不回复任何消息
+198.51.101.22 → 10.50.6.1  ICMP Echo Request  （无回复）
 198.51.101.22 → 10.50.6.1  ICMP Echo Request  （无回复）
 198.51.101.22 → 10.50.6.1  ICMP Echo Request  （无回复）
 
-# 针对 10.50.135.1 — 走默认路由后，网关正常回复 Time Exceeded
+# 针对 10.50.135.1 — 网关正常处理，回复 Time Exceeded
+198.51.101.22 → 10.50.135.1  ICMP Echo Request
+198.51.100.2  → 198.51.101.22  ICMP Time Exceeded  ← 网关有回复！
 198.51.101.22 → 10.50.135.1  ICMP Echo Request
 198.51.100.2  → 198.51.101.22  ICMP Time Exceeded  ← 网关有回复！
 ```
 
-网关对 `10.50.6.1` 静默丢弃（可能是 ACL、路由黑洞或策略路由），但对 `10.50.135.1` 正常转发并回复 Time Exceeded。
+**这就是 tracert 结果不同的真正原因：**
+
+- `tracert 10.50.135.1`：包走默认路由 → 到达网关 `198.51.100.2` → 网关正常回复 **ICMP Time Exceeded** → tracert 显示 `198.51.100.2` 作为第一跳 ✅
+- `tracert 10.50.6.1`：包走默认路由 → 到达网关 `198.51.100.2` → 网关**静默丢弃** → 没有任何回复 → tracert 显示本机 `10.20.11.15` 报告"无法访问目标主机" ❌
+
+**用人话说：** 两封信都寄出去了，都经过了同一个邮局（默认网关）。只不过邮局对一封信正常处理（退回了"查无此人"），对另一封信直接扔进了碎纸机（静默丢弃）。寄信人看到的结果不同，但问题不在寄信人身上 — 在邮局。
+
+网关静默丢弃的可能原因包括：ACL/防火墙规则、路由黑洞、或策略路由差异。**这已经不是 Windows 客户端的问题了。**
 
 ### 解决方案
 
@@ -254,28 +246,29 @@ flowchart TD
     Blocker -->|"New clue: Maybe ARP cache STATE matters?"| Hypo2["💡 Hypothesis 2: ARP cache state affects routing"]
     Hypo2 --> Verify1["🧪 Experiment: arp -d then tracert"]
     Verify1 -->|"After clear: both same. Then diverge again!"| Verify2["🧪 Check: Get-NetNeighbor"]
-    Verify2 -->|"Incomplete vs Unreachable!"| RootCause["🎯 Root Cause: IppCompareRoutes Reachability PK"]
+    Verify2 -->|"Incomplete vs Unreachable!"| PktCap["🧪 Packet Capture: Both src=198.51.101.22"]
+    PktCap -->|"Both take default route!"| RootCause["🎯 Root Cause: Gateway handles IPs differently"]
     RootCause --> Fix["✅ Fix: Add default gateway"]
 
     style Blocker fill:#ff6b6b,color:#fff
     style RootCause fill:#51cf66,color:#fff
-    style Hypo2 fill:#ffd43b,color:#333
+    style PktCap fill:#ffd43b,color:#333
 ```
 
 ### 🎒 Takeaways
 
-1. **技术知识**：Windows 路由选择中，`IppCompareRoutes()` 的 **Reachability 优先于 Prefix Length**。一条可达的 `/0` 默认路由会赢过一条不可达的 `/32` host route。ARP Cache 的 `Unreachable` 和 `Incomplete` 虽然都是"失败"，但在路由选择中被**区别对待**。
-2. **排查方法**：当路由表配置完全相同但行为不同时，不要只看静态配置 — 要关注**动态状态**（ARP Cache、Path Cache、接口状态等）。`Get-NetNeighbor` 是查看 ARP Cache 详细状态的利器。
-3. **经验法则**：`arp -d` 清除缓存后重试，是验证"ARP 缓存状态是否影响路由选择"的快速方法。如果清除后行为一致，说明问题就在缓存。
-4. **踩坑提醒**：不要假设"ARP 失败 = ARP 失败"。同样是拿不到 MAC 地址，`Incomplete`（还在尝试中）和 `Unreachable`（已放弃）对系统来说是完全不同的信号。
+1. **技术知识**：Windows 路由选择中，`IppCompareRoutes()` 的 **Reachability 优先于 Prefix Length**。当 ARP Cache 显示下一跳不可达时（不管是 `Incomplete` 还是 `Unreachable`），host route 在 Reachability PK 中都会被淘汰，流量会 fallback 到默认路由。
+2. **排查方法**：当 tracert 显示不同下一跳时，不要只盯着本地路由表 — 先用**抓包确认数据包的源 IP**，判断实际走的是哪条路由。tracert 显示的"第一跳"可能是上游设备回复的 ICMP，而不是路由选择的结果。
+3. **经验法则**：`arp -d` 清除缓存 + `Get-NetNeighbor` 查看状态，是排查"路由行为异常"时的标准动作。即使最终发现问题不在 ARP Cache，这个过程也能快速缩小排查范围。
+4. **踩坑提醒**：tracert 结果不同 ≠ 路由选择不同。上游网关对不同目标 IP 的处理策略（ACL、路由黑洞、策略路由）也会导致 tracert 结果截然不同，但实际上本地的路由选择可能是一致的。
 
 ### 🔧 工具箱 (Useful Commands & Tools)
 
 | 命令/工具 | 用途 | 在本案中的作用 |
 |----------|------|--------------|
-| `tracert <IP>` | 追踪路由路径 | 发现了两个 IP 走了不同的路径 |
-| `Get-NetNeighbor \| Format-List *` | 查看完整 ARP Cache（含状态） | 揭示了 Incomplete vs Unreachable 的关键差异 |
-| `arp -d *` | 清除所有 ARP Cache | 验证了 ARP Cache 是行为差异的根源 |
+| `tracert <IP>` | 追踪路由路径 | 发现了两个 IP 显示不同的下一跳，触发了调查 |
+| `Get-NetNeighbor \| Format-List *` | 查看完整 ARP Cache（含状态） | 揭示了 Incomplete vs Unreachable 的状态差异 |
+| `arp -d *` | 清除所有 ARP Cache | 验证了 ARP Cache 状态对行为有影响 |
 | `route print` | 查看路由表 | 确认两个 IP 的路由配置完全一致 |
 | Network Monitor / Wireshark | 网络包抓取 | 推翻了 ARP Response 假设，验证了默认路由行为 |
 
@@ -290,7 +283,7 @@ flowchart TD
 
 ## 📝 一句话破案总结 (One-liner)
 
-> 客户发现路由表配置一模一样的两个 IP 走了不同的路。真相是 ARP Cache 的 `Unreachable` 和 `Incomplete` 两种"失败"状态，被 Windows 路由引擎 `IppCompareRoutes()` 的 **Reachability 优先级**区别对待了 — `Unreachable` 的路由在第一轮 PK 就被淘汰，包改走了默认路由。**同样是走不通的路，"已确认走不通"和"还在试"在系统眼里完全不同。**
+> 客户发现路由表配置一模一样的两个 IP，tracert 却显示了不同的下一跳。排查发现两个 IP 实际上**都走了默认路由**（抓包源 IP 一致），tracert 显示不同是因为**上游网关对这两个目标 IP 的处理策略不同** — 一个正常回复 Time Exceeded，一个静默丢弃。**看似路由选择的问题，真相却在上游设备。**
 
 ---
 ---
@@ -300,7 +293,7 @@ flowchart TD
 **Product/Service:** Windows TCP/IP Routing
 **Difficulty:** ⭐⭐⭐⭐ (4/5)
 **Duration:** ~2 hours
-**Key Technique:** Impact of ARP Cache states on `IppCompareRoutes()` Reachability evaluation
+**Key Technique:** `IppCompareRoutes()` Reachability evaluation + upstream gateway differential handling of destination IPs
 
 ---
 
@@ -442,20 +435,16 @@ Get-NetNeighbor | Format-List * | Out-File -FilePath C:\netneighbor_detail.txt -
 
 **Key discovery:** The two IPs have different ARP Cache states:
 
-| Target IP | ARP Cache State | tracert Next Hop |
-|-----------|----------------|-----------------|
-| 10.50.6.1 | **Incomplete** | 10.20.11.15 (local interface) |
-| 10.50.135.1 | **Unreachable** | 198.51.100.2 (default route gateway) |
+| Target IP | ARP Cache State |
+|-----------|----------------|
+| 10.50.6.1 | **Incomplete** |
+| 10.50.135.1 | **Unreachable** |
 
-**Hypothesis confirmed:** ARP Cache states ARE different, and the difference directly maps to the tracert behavior!
+The states are indeed different! But what does this actually mean for route selection? We need to dig deeper.
 
 ---
 
 ## 🎯 The Resolution
-
-### Root Cause — The "Culprit"
-
-**The `Unreachable` and `Incomplete` ARP Cache states — both representing "failure" — are treated differently by Windows TCP/IP's route selection engine `IppCompareRoutes()`.**
 
 ### The "Modus Operandi" — How Windows route selection really works
 
@@ -467,49 +456,48 @@ Reachability > Prefix Length > Dead Gateway > Metric > ECMP Hash
 
 The critical insight: **Reachability ranks ABOVE Prefix Length!**
 
-**Scenario A — `10.50.6.1` (ARP = Incomplete):**
+Regardless of whether the ARP Cache state is `Incomplete` or `Unreachable`, the next hop for the host route has **no usable MAC address** — it's unreachable either way. So `IppCompareRoutes()` **eliminates the /32 host route in Round 1 of the Reachability PK**, and both IPs **end up taking the default route**:
+
 ```
-Candidate routes: /32 host route via 10.20.11.15 (ARP=Incomplete)
+Route selection is IDENTICAL for both IPs:
+
+Candidate routes: /32 host route via 10.20.11.15 (ARP=Incomplete or Unreachable)
                   /0  default route via 198.51.100.1
 
 PK Round 1 - Reachability:
-  /32 route: ARP=Incomplete → Still trying, not yet declared unreachable → ✅ Eligible
-  /0  route: Gateway reachable → ✅ Eligible
+  /32 route: ARP failed (whether Incomplete or Unreachable) → Unreachable → ❌ Eliminated
+  /0  route: Default gateway reachable → ✅ Wins
 
-PK Round 2 - Prefix Length:
-  /32 > /0 → /32 wins!
-
-Result: Takes host route → Sends ARP locally → No reply → Reports "Destination host unreachable"
+Result: Both IPs take default route → 198.51.100.1 → reach upstream gateway 198.51.100.2
 ```
 
-**Scenario B — `10.50.135.1` (ARP = Unreachable):**
-```
-Candidate routes: /32 host route via 10.20.11.15 (ARP=Unreachable)
-                  /0  default route via 198.51.100.1
+### Root Cause — The "Culprit"
 
-PK Round 1 - Reachability:
-  /32 route: ARP=Unreachable → Confirmed unreachable → ❌ Eliminated!
-  /0  route: Gateway reachable → ✅ Sole survivor
+**The real culprit isn't on the Windows client at all — it's the upstream gateway `198.51.100.2`!**
 
-Result: Takes default route → 198.51.100.1 → Reaches upstream gateway 198.51.100.2
-```
-
-**In plain English:** `Incomplete` is like a suspect "still being interrogated" — the system won't give up on that path yet. `Unreachable` is like a suspect with a "confirmed alibi" — the system eliminates that path immediately and falls back to the default route.
-
-### The final piece of the puzzle
-
-Packet capture also revealed a second layer — not on the Windows client, but on **upstream gateway 198.51.100.2**:
+Packet capture proves it — both IPs have **source address `198.51.101.22` (the default route NIC)**, confirming both took the default route. But the upstream gateway treats them completely differently:
 
 ```
-# For 10.50.6.1 — Gateway silently drops, no response
+# For 10.50.6.1 — Gateway silently drops, no response at all
+198.51.101.22 → 10.50.6.1  ICMP Echo Request  (no reply)
+198.51.101.22 → 10.50.6.1  ICMP Echo Request  (no reply)
 198.51.101.22 → 10.50.6.1  ICMP Echo Request  (no reply)
 
-# For 10.50.135.1 — Gateway responds normally with Time Exceeded
+# For 10.50.135.1 — Gateway processes normally, responds with Time Exceeded
+198.51.101.22 → 10.50.135.1  ICMP Echo Request
+198.51.100.2  → 198.51.101.22  ICMP Time Exceeded  ← Gateway replies!
 198.51.101.22 → 10.50.135.1  ICMP Echo Request
 198.51.100.2  → 198.51.101.22  ICMP Time Exceeded  ← Gateway replies!
 ```
 
-The gateway treats the two destination IPs differently (likely due to ACLs, route blackholes, or policy routing).
+**This is the real reason behind different tracert results:**
+
+- `tracert 10.50.135.1`: Packet takes default route → reaches gateway `198.51.100.2` → gateway replies with **ICMP Time Exceeded** → tracert shows `198.51.100.2` as hop 1 ✅
+- `tracert 10.50.6.1`: Packet takes default route → reaches gateway `198.51.100.2` → gateway **silently drops** → no response → tracert shows local machine `10.20.11.15` reporting "Destination host unreachable" ❌
+
+**In plain English:** Both letters were mailed out through the same post office (default gateway). But the post office handled them differently — one got a proper "return to sender" notice, while the other was silently shredded. The sender sees different outcomes, but the problem isn't with the sender — it's with the post office.
+
+Possible reasons for the gateway's silent drop: ACL/firewall rules, route blackhole, or policy routing differences. **This is no longer a Windows client issue.**
 
 ### The Fix
 
@@ -535,30 +523,31 @@ flowchart TD
     Blocker -->|"New clue: Maybe ARP cache STATE matters?"| Hypo2["💡 Hypothesis 2: ARP cache state affects routing"]
     Hypo2 --> Verify1["🧪 Experiment: arp -d then tracert"]
     Verify1 -->|"After clear: both same. Then diverge again!"| Verify2["🧪 Check: Get-NetNeighbor"]
-    Verify2 -->|"Incomplete vs Unreachable!"| RootCause["🎯 Root Cause: IppCompareRoutes Reachability PK"]
+    Verify2 -->|"Incomplete vs Unreachable!"| PktCap2["🧪 Packet Capture: Both src=198.51.101.22"]
+    PktCap2 -->|"Both take default route!"| RootCause["🎯 Root Cause: Gateway handles IPs differently"]
     RootCause --> Fix["✅ Fix: Add default gateway"]
 
     style Blocker fill:#ff6b6b,color:#fff
     style RootCause fill:#51cf66,color:#fff
-    style Hypo2 fill:#ffd43b,color:#333
+    style PktCap2 fill:#ffd43b,color:#333
 ```
 
 ### 🎒 Takeaways
 
-1. **Technical Knowledge**: In Windows route selection, `IppCompareRoutes()` ranks **Reachability above Prefix Length**. A reachable `/0` default route beats an unreachable `/32` host route. ARP Cache states `Unreachable` and `Incomplete` — though both represent "failure" — are **treated differently** in route selection.
-2. **Troubleshooting Method**: When route table config is identical but behavior differs, look beyond static configuration — investigate **dynamic state** (ARP Cache, Path Cache, interface status). `Get-NetNeighbor` is the go-to tool for detailed ARP Cache inspection.
-3. **Rule of Thumb**: `arp -d` followed by retry is a quick way to verify whether ARP cache state is influencing route selection. If behavior becomes consistent after clearing, the cache is your culprit.
-4. **Pitfall Warning**: Don't assume "ARP failure = ARP failure." Both `Incomplete` (still trying) and `Unreachable` (given up) mean the MAC address wasn't obtained, but the system treats them as fundamentally different signals.
+1. **Technical Knowledge**: In Windows route selection, `IppCompareRoutes()` ranks **Reachability above Prefix Length**. When ARP Cache shows the next hop as unreachable (whether `Incomplete` or `Unreachable`), the host route is eliminated in the Reachability PK, and traffic falls back to the default route.
+2. **Troubleshooting Method**: When tracert shows different next hops, don't just stare at the local route table — **capture packets and check the source IP** to determine which route was actually taken. The "first hop" in tracert might be an ICMP reply from an upstream device, not a direct reflection of route selection.
+3. **Rule of Thumb**: `arp -d` to clear cache + `Get-NetNeighbor` to inspect states is the standard playbook for "abnormal routing behavior." Even if the root cause turns out not to be ARP Cache, this process quickly narrows down the investigation scope.
+4. **Pitfall Warning**: Different tracert results ≠ different route selection. An upstream gateway's handling policies (ACL, route blackhole, policy routing) for different destination IPs can produce completely different tracert outputs, even when the local route selection is identical.
 
 ### 🔧 Useful Commands & Tools
 
 | Command/Tool | General Purpose | Role in This Case |
 |-------------|-----------------|-------------------|
-| `tracert <IP>` | Trace routing path | Revealed different paths for identically-routed IPs |
-| `Get-NetNeighbor \| Format-List *` | View detailed ARP Cache with states | Exposed the Incomplete vs Unreachable key difference |
-| `arp -d *` | Clear all ARP Cache entries | Proved ARP Cache was the root cause of divergence |
+| `tracert <IP>` | Trace routing path | Revealed different next hops for identically-routed IPs, triggering the investigation |
+| `Get-NetNeighbor \| Format-List *` | View detailed ARP Cache with states | Exposed the Incomplete vs Unreachable state differences |
+| `arp -d *` | Clear all ARP Cache entries | Verified that ARP Cache state influences behavior |
 | `route print` | Display route table | Confirmed identical route configurations |
-| Network Monitor / Wireshark | Packet capture & analysis | Disproved the ARP Response hypothesis; verified default route behavior |
+| Network Monitor / Wireshark | Packet capture & analysis | Disproved ARP Response hypothesis; proved both IPs took default route (same source IP) |
 
 ### 📚 References
 
@@ -571,4 +560,4 @@ flowchart TD
 
 ## 📝 One-liner
 
-> The customer discovered two identically-routed IPs taking different paths. The culprit? ARP Cache states `Unreachable` vs `Incomplete` — though both mean "no MAC address," Windows' `IppCompareRoutes()` **Reachability check** eliminates `Unreachable` routes before even comparing prefix length, causing traffic to silently fall back to the default route. **Same failure, different memory of that failure, completely different outcome.**
+> The customer discovered two identically-routed IPs showing different tracert next hops. Investigation revealed both IPs **actually took the same default route** (confirmed by identical source IPs in packet capture). The tracert difference was caused by the **upstream gateway treating the two destination IPs differently** — one got a proper Time Exceeded reply, the other was silently dropped. **What looked like a routing problem was actually an upstream device policy issue.**
