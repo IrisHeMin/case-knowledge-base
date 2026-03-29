@@ -303,27 +303,215 @@ nltest /dsgetdc:contoso.com
 gpupdate /force
 ```
 
-## 7. 与相关技术的对比 (Comparison with Related Technologies)
+## 7. 通过 GPO 集中推送防火墙规则 (Deploy via Group Policy)
 
-| 维度 | Windows Firewall (WFAS) | Azure NSG | GPO Firewall Rules |
-|------|------------------------|-----------|-------------------|
-| 作用层级 | 主机级别 (Host-based) | 网络级别 (VNet/Subnet/NIC) | 主机级别，域统一下发 |
-| 配置方式 | PowerShell / GUI / netsh | Azure Portal / CLI / ARM | Group Policy Editor |
-| 粒度 | 端口 + IP + 程序 + 服务 | 端口 + IP + Service Tag | 同 WFAS |
-| 适用场景 | 单机隔离 | Azure VM 网络隔离 | 域内批量统一策略 |
-| 是否可叠加 | ✅ | ✅ 与 WFAS 叠加使用 | ✅ 通过 GPO 下发到 WFAS |
+### 配置位置
+
+在 **Group Policy Management Console (GPMC)** 中：
+
+```
+Computer Configuration
+  → Policies
+    → Windows Settings
+      → Security Settings
+        → Windows Firewall with Advanced Security
+```
+
+在这个节点下可以看到和本地 `wf.msc` 一样的界面，可配置 Inbound/Outbound Rules 和 Profile 默认行为。
+
+### 推到机器上的存储位置
+
+| 类型 | 注册表路径 |
+|------|-----------|
+| **GPO 推送的规则** | `HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules` |
+| **GPO Profile 设置** | `HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile` 等 |
+| **本地规则** | `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules` |
+
+### GPO 规则特点
+
+- GPO 推送的规则在 `wf.msc` 中显示为 **灰色（不可编辑）**
+- 本地管理员只能查看，不能修改或删除 GPO 规则
+- 默认每 **90 分钟**后台刷新（随机偏移 0-30 分钟）
+- 防火墙监控注册表变更 → 通知 **Windows Filtering Platform (WFP)** → 读取所有规则 → 应用新 filter → 移除旧 filter
+
+### 验证命令
+
+```powershell
+# 强制刷新 GPO
+gpupdate /force
+
+# 查看 GPO 推送的规则
+Get-NetFirewallRule -PolicyStore ActiveStore |
+    Where-Object { $_.PolicyStoreSource -ne "PersistentStore" } |
+    Format-Table DisplayName, Direction, Action
+
+# 直接查看注册表
+Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules"
+```
+
+## 8. 通过 Intune (MDM) 推送防火墙规则 (Deploy via Intune)
+
+### 配置位置
+
+在 **Microsoft Intune admin center** 中：
+
+```
+Endpoint Security
+  → Firewall
+    → Create Policy
+      Platform: Windows
+      Profile:
+        ├── Windows Firewall        ← 配置 Profile 级别设置（默认行为）
+        └── Windows Firewall Rules  ← 配置具体规则（每个策略最多 150 条）
+```
+
+每条规则可配的字段：
+
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| Name | 规则名称 | Allow RDP from Admin |
+| Direction | Inbound / Outbound | Inbound |
+| Action | Allow / Block | Allow |
+| Protocol | TCP (6) / UDP (17) | 6 |
+| Local Port Ranges | 本地端口 | 3389 |
+| Remote Port Ranges | 远程端口 | 3389 |
+| Remote Address Ranges | 远程 IP | 10.0.1.10,10.0.1.11 |
+| Profile | Domain/Private/Public | Domain |
+
+### 推到机器上的存储位置
+
+Intune 通过 **Firewall CSP** (`./Vendor/MSFT/Firewall/MdmStore`) 下发规则：
+
+| 类型 | 注册表路径 |
+|------|-----------|
+| **Intune (MDM) 规则** | `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\Mdm\FirewallRules` |
+| **Intune Profile 设置** | `...\FirewallPolicy\Mdm\DomainProfile` 等 |
+
+### 验证命令
+
+```powershell
+# 查看 MDM 推送的规则（注册表）
+Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\Mdm\FirewallRules"
+
+# 用 PowerShell 查看所有规则及来源
+Get-NetFirewallRule | Select-Object DisplayName, Direction, Action, PolicyStoreSource |
+    Format-Table -AutoSize
+# PolicyStoreSource 值：
+#   PersistentStore  = 本地规则
+#   YOURPC\MDM       = Intune 推送
+#   GroupPolicy       = GPO 推送
+
+# 查看 Intune 同步状态
+dsregcmd /status
+```
+
+### Intune 规则特点
+
+- 在 `wf.msc` 中也显示为 **灰色（不可编辑）**，某些版本可能不直接显示，需用 PowerShell 查看
+- 每个策略最多 150 条规则，可叠加多个策略
+- 默认每 **8 小时**同步一次（或手动触发 Sync）
+
+## 9. 规则优先级深度解析 (Rule Precedence Deep Dive)
+
+当 GPO、Intune、本地同时存在防火墙规则，且规则之间有重叠或冲突时，优先级如何判定？
+
+### 维度一：同一来源内 — Block vs Allow
+
+**不管规则来自 GPO、Intune 还是本地，同一层内的优先级逻辑一致：**
+
+```
+① 显式 Block 规则  >  ② 显式 Allow 规则  >  ③ 默认行为 (Default Action)
+```
+
+| 优先级 | 规则类型 | 说明 |
+|--------|---------|------|
+| **最高** | 显式 Block 规则 | 只要有 Block，无论有没有 Allow，流量都被阻断 |
+| **中** | 显式 Allow 规则 | 在没有 Block 冲突的前提下放行 |
+| **最低** | Default Action | 没有任何匹配规则时才使用默认行为 |
+
+> ⚠️ **核心原则：Block 永远赢 Allow**。如果同一个流量同时匹配了一条 Block 规则和一条 Allow 规则，Block 胜出。
+
+另外：**更具体的规则优先于更宽泛的规则**（例如单 IP 规则优先于 IP 范围规则），但显式 Block 仍然优先于任何 Allow。
+
+### 维度二：不同来源之间 — GPO vs Intune vs 本地
+
+```
+┌─────────────────────────────────────────────────┐
+│           最终生效的规则集 (Active Store)          │
+│                                                 │
+│   评估顺序（所有来源的规则合并后统一评估）：         │
+│                                                 │
+│   1. GPO/MDM 的 Block 规则     ← 最高优先级      │
+│   2. GPO/MDM 的 Allow 规则                       │
+│   3. 本地的 Block 规则 *                          │
+│   4. 本地的 Allow 规则 *                          │
+│   5. Default Action                             │
+│                                                 │
+│   * 前提：AllowLocalPolicyMerge = true（默认）   │
+│     如果设为 false，本地规则被完全忽略             │
+└─────────────────────────────────────────────────┘
+```
+
+### AllowLocalPolicyMerge 的影响
+
+| AllowLocalPolicyMerge | 本地规则的行为 |
+|----------------------|---------------|
+| **true**（默认） | 本地规则与 GPO/MDM 规则**合并**，但 GPO/MDM 的 Block 仍优先 |
+| **false** | 本地规则**完全被忽略**，只有 GPO/MDM 推送的规则生效 |
+
+可通过 GPO 或 Intune CSP 设置：
+- **GPO**：Windows Firewall Properties → Domain Profile → Settings → Rule merging → Apply local firewall rules: **No**
+- **Intune CSP**：`./Vendor/MSFT/Firewall/MdmStore/DomainProfile/AllowLocalPolicyMerge` 设为 **0**
+
+### 冲突示例
+
+假设有以下规则：
+
+| 来源 | 规则 | 方向 | 端口 | Action |
+|------|------|------|------|--------|
+| GPO | Rule A | Inbound | TCP 3389 from 10.0.1.0/24 | **Allow** |
+| Intune | Rule B | Inbound | TCP 3389 from Any | **Block** |
+| 本地 | Rule C | Inbound | TCP 3389 from 10.0.1.5 | **Allow** |
+
+**结果**：
+- 来自 `10.0.1.5` 的 RDP → ❌ **被 Block**（Intune 的显式 Block 优先于所有 Allow）
+- 来自 `10.0.1.100` 的 RDP → ❌ **被 Block**（同理）
+- **Block 永远赢**，不管 Allow 来自 GPO 还是本地
+
+### GPO 与 Intune 之间的关系
+
+- GPO 和 Intune 推送的规则属于**同等优先级**
+- 如果两者推送**冲突的设置**（如同一个 Profile 设置不同的默认行为），结果不确定
+- **微软建议：选择一种管理方式**，不要 GPO 和 Intune 同时管理防火墙
+
+## 10. 与相关技术的对比 (Comparison with Related Technologies)
+
+| 维度 | Windows Firewall (WFAS) | Azure NSG | GPO Firewall Rules | Intune Firewall |
+|------|------------------------|-----------|-------------------|-----------------|
+| 作用层级 | 主机级别 (Host-based) | 网络级别 (VNet/Subnet/NIC) | 主机级别，域统一下发 | 主机级别，云统一下发 |
+| 配置方式 | PowerShell / GUI / netsh | Azure Portal / CLI / ARM | Group Policy Editor | Intune Admin Center |
+| 粒度 | 端口 + IP + 程序 + 服务 | 端口 + IP + Service Tag | 同 WFAS | 同 WFAS |
+| 适用设备 | 任何 Windows | Azure VM | Domain-joined | Entra ID joined / Intune enrolled |
+| 适用场景 | 单机隔离 | Azure VM 网络隔离 | 域内批量统一策略 | 云管理设备统一策略 |
+| 规则存储 | 本地注册表 | Azure 平台 | `HKLM\SOFTWARE\Policies\...` | `...\FirewallPolicy\Mdm\...` |
+| 是否可叠加 | ✅ | ✅ 与 WFAS 叠加 | ✅ 通过 GPO 下发到 WFAS | ✅ 通过 CSP 下发到 WFAS |
 
 **选型建议**：
 - 单台服务器快速隔离 → WFAS + PowerShell
 - Azure VM → NSG + WFAS 双层防护
-- 域内批量管控 → GPO 下发 Firewall Rules（最终生效的还是 WFAS）
+- 域内批量管控 → GPO 下发 Firewall Rules
+- 云管理设备 → Intune Endpoint Security Firewall Policy
+- ⚠️ 不建议 GPO 和 Intune 同时管理防火墙，避免冲突
 
-## 8. 参考资料 (References)
+## 11. 参考资料 (References)
 
 - [Manage Windows Firewall with the command line](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/configure-with-command-line) — PowerShell 和 netsh 管理 Windows Firewall 的完整参考
-- [Windows Firewall rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules) — 规则优先级和类型的官方说明
+- [Windows Firewall rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules) — 规则优先级、Local Policy Merge 和规则类型的官方说明
 - [Best practices for configuring Windows Firewall](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/best-practices-configuring) — GUI 和高级配置示例
 - [How to configure a firewall for AD domains and trusts](https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/config-firewall-for-ad-domains-and-trusts) — AD 域认证所需端口的权威列表 (KB179442)
+- [Windows Firewall tools](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/tools) — GPO 处理机制和注册表存储说明
+- [Firewall policy for endpoint security in Intune](https://learn.microsoft.com/en-us/mem/intune/protect/endpoint-security-firewall-policy) — Intune 防火墙策略配置指南
+- [Firewall CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/firewall-csp) — Intune MDM 防火墙 CSP 详细参考
 
 ---
 ---
@@ -559,19 +747,211 @@ New-NetFirewallRule -DisplayName "Allow RDP Out to Trusted Hosts" `
 - Regularly audit rules: `Get-NetFirewallRule | Where-Object {$_.Enabled -eq 'True'}`
 - For Azure VMs, **NSG rules must be configured in sync with Windows Firewall rules** for defense in depth
 
-## 7. Comparison with Related Technologies
+## 7. Deploy via Group Policy (GPO)
 
-| Dimension | Windows Firewall (WFAS) | Azure NSG | GPO Firewall Rules |
-|-----------|------------------------|-----------|-------------------|
-| Scope | Host-level | Network-level (VNet/Subnet/NIC) | Host-level, domain-wide deployment |
-| Configuration | PowerShell / GUI / netsh | Azure Portal / CLI / ARM | Group Policy Editor |
-| Granularity | Port + IP + Program + Service | Port + IP + Service Tag | Same as WFAS |
-| Best For | Single-machine isolation | Azure VM network isolation | Bulk policy across domain |
-| Stackable | ✅ | ✅ Layers with WFAS | ✅ Pushes to WFAS via GPO |
+### Configuration Location
 
-## 8. References
+In **Group Policy Management Console (GPMC)**:
 
-- [Manage Windows Firewall with the command line](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/configure-with-command-line) — Complete reference for PowerShell and netsh firewall management
-- [Windows Firewall rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules) — Official documentation on rule precedence and types
-- [Best practices for configuring Windows Firewall](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/best-practices-configuring) — GUI and advanced configuration examples
+```
+Computer Configuration
+  → Policies
+    → Windows Settings
+      → Security Settings
+        → Windows Firewall with Advanced Security
+```
+
+This provides the same interface as the local `wf.msc`, where you can configure Inbound/Outbound Rules and Profile default actions.
+
+### Storage Location on Target Machines
+
+| Type | Registry Path |
+|------|--------------|
+| **GPO-pushed rules** | `HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules` |
+| **GPO Profile settings** | `HKLM\SOFTWARE\Policies\Microsoft\WindowsFirewall\DomainProfile` etc. |
+| **Local rules** | `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules` |
+
+### GPO Rule Characteristics
+
+- GPO-pushed rules appear **grayed-out (read-only)** in `wf.msc`
+- Local administrators can view but cannot modify or delete GPO rules
+- Refreshed every **90 minutes** by default (with 0-30 minute random offset)
+- Firewall monitors registry changes → notifies **Windows Filtering Platform (WFP)** → reads all rules → applies new filters → removes old filters
+
+### Verification Commands
+
+```powershell
+# Force GPO refresh
+gpupdate /force
+
+# View GPO-pushed rules
+Get-NetFirewallRule -PolicyStore ActiveStore |
+    Where-Object { $_.PolicyStoreSource -ne "PersistentStore" } |
+    Format-Table DisplayName, Direction, Action
+
+# Check registry directly
+Get-ItemProperty "HKLM:\SOFTWARE\Policies\Microsoft\WindowsFirewall\FirewallRules"
+```
+
+## 8. Deploy via Intune (MDM)
+
+### Configuration Location
+
+In **Microsoft Intune admin center**:
+
+```
+Endpoint Security
+  → Firewall
+    → Create Policy
+      Platform: Windows
+      Profile:
+        ├── Windows Firewall        ← Profile-level settings (default actions)
+        └── Windows Firewall Rules  ← Specific rules (up to 150 per policy)
+```
+
+Each rule supports the following fields:
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| Name | Rule name | Allow RDP from Admin |
+| Direction | Inbound / Outbound | Inbound |
+| Action | Allow / Block | Allow |
+| Protocol | TCP (6) / UDP (17) | 6 |
+| Local Port Ranges | Local ports | 3389 |
+| Remote Port Ranges | Remote ports | 3389 |
+| Remote Address Ranges | Remote IPs | 10.0.1.10,10.0.1.11 |
+| Profile | Domain/Private/Public | Domain |
+
+### Storage Location on Target Machines
+
+Intune delivers rules via **Firewall CSP** (`./Vendor/MSFT/Firewall/MdmStore`):
+
+| Type | Registry Path |
+|------|--------------|
+| **Intune (MDM) rules** | `HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\Mdm\FirewallRules` |
+| **Intune Profile settings** | `...\FirewallPolicy\Mdm\DomainProfile` etc. |
+
+### Verification Commands
+
+```powershell
+# View MDM-pushed rules (registry)
+Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\Mdm\FirewallRules"
+
+# View all rules with source
+Get-NetFirewallRule | Select-Object DisplayName, Direction, Action, PolicyStoreSource |
+    Format-Table -AutoSize
+# PolicyStoreSource values:
+#   PersistentStore  = Local rules
+#   YOURPC\MDM       = Intune-pushed
+#   GroupPolicy       = GPO-pushed
+
+# Check Intune sync status
+dsregcmd /status
+```
+
+### Intune Rule Characteristics
+
+- Appear **grayed-out (read-only)** in `wf.msc`; some versions may not display them directly — use PowerShell to verify
+- Up to 150 rules per policy; multiple policies can be stacked
+- Syncs every **8 hours** by default (or manually triggered)
+
+## 9. Rule Precedence Deep Dive
+
+When GPO, Intune, and local rules coexist with overlapping or conflicting configurations, how is precedence determined?
+
+### Dimension 1: Within Same Source — Block vs Allow
+
+**Regardless of whether rules come from GPO, Intune, or local, the precedence logic is consistent:**
+
+```
+① Explicit Block rules  >  ② Explicit Allow rules  >  ③ Default Action
+```
+
+| Priority | Rule Type | Description |
+|----------|----------|-------------|
+| **Highest** | Explicit Block | If a Block rule matches, traffic is blocked regardless of any Allow rules |
+| **Medium** | Explicit Allow | Permits traffic only when no conflicting Block rule exists |
+| **Lowest** | Default Action | Applied only when no matching rules exist |
+
+> ⚠️ **Core principle: Block always wins over Allow.** If traffic matches both a Block and an Allow rule, Block prevails.
+
+Additionally: **More specific rules take precedence over broader rules** (e.g., single IP > IP range), but explicit Block still overrides any Allow.
+
+### Dimension 2: Across Sources — GPO vs Intune vs Local
+
+```
+┌─────────────────────────────────────────────────────┐
+│           Final Effective Ruleset (Active Store)      │
+│                                                     │
+│   Evaluation order (all sources merged):             │
+│                                                     │
+│   1. GPO/MDM Block rules      ← Highest priority    │
+│   2. GPO/MDM Allow rules                            │
+│   3. Local Block rules *                             │
+│   4. Local Allow rules *                             │
+│   5. Default Action                                  │
+│                                                     │
+│   * Requires: AllowLocalPolicyMerge = true (default) │
+│     If set to false, local rules are ignored entirely │
+└─────────────────────────────────────────────────────┘
+```
+
+### AllowLocalPolicyMerge Impact
+
+| AllowLocalPolicyMerge | Local Rule Behavior |
+|----------------------|---------------------|
+| **true** (default) | Local rules **merge** with GPO/MDM rules, but GPO/MDM Block still takes priority |
+| **false** | Local rules are **completely ignored**; only GPO/MDM rules apply |
+
+Configurable via:
+- **GPO**: Windows Firewall Properties → Domain Profile → Settings → Rule merging → Apply local firewall rules: **No**
+- **Intune CSP**: `./Vendor/MSFT/Firewall/MdmStore/DomainProfile/AllowLocalPolicyMerge` set to **0**
+
+### Conflict Example
+
+Given these rules:
+
+| Source | Rule | Direction | Port | Action |
+|--------|------|-----------|------|--------|
+| GPO | Rule A | Inbound | TCP 3389 from 10.0.1.0/24 | **Allow** |
+| Intune | Rule B | Inbound | TCP 3389 from Any | **Block** |
+| Local | Rule C | Inbound | TCP 3389 from 10.0.1.5 | **Allow** |
+
+**Result**:
+- RDP from `10.0.1.5` → ❌ **Blocked** (Intune's explicit Block overrides all Allow rules)
+- RDP from `10.0.1.100` → ❌ **Blocked** (same reason)
+- **Block always wins**, regardless of which source the Allow comes from
+
+### GPO vs Intune Relationship
+
+- GPO and Intune rules are at **equal priority level**
+- If both push **conflicting settings** (e.g., different default actions for the same Profile), the result is unpredictable
+- **Microsoft recommends: choose one management method** — do not manage firewall with both GPO and Intune simultaneously
+
+## 10. Comparison with Related Technologies
+
+| Dimension | Windows Firewall (WFAS) | Azure NSG | GPO Firewall Rules | Intune Firewall |
+|-----------|------------------------|-----------|-------------------|-----------------|
+| Scope | Host-level | Network-level (VNet/Subnet/NIC) | Host-level, domain-wide | Host-level, cloud-managed |
+| Configuration | PowerShell / GUI / netsh | Azure Portal / CLI / ARM | Group Policy Editor | Intune Admin Center |
+| Granularity | Port + IP + Program + Service | Port + IP + Service Tag | Same as WFAS | Same as WFAS |
+| Target Devices | Any Windows | Azure VMs | Domain-joined | Entra ID joined / Intune enrolled |
+| Best For | Single-machine isolation | Azure VM network isolation | Bulk policy across domain | Cloud-managed device policy |
+| Rule Storage | Local registry | Azure platform | `HKLM\SOFTWARE\Policies\...` | `...\FirewallPolicy\Mdm\...` |
+| Stackable | ✅ | ✅ Layers with WFAS | ✅ Pushes to WFAS via GPO | ✅ Pushes to WFAS via CSP |
+
+**Selection guidance**:
+- Single-server quick isolation → WFAS + PowerShell
+- Azure VMs → NSG + WFAS defense-in-depth
+- Domain-wide bulk management → GPO Firewall Rules
+- Cloud-managed devices → Intune Endpoint Security Firewall Policy
+- ⚠️ Do not use GPO and Intune simultaneously for firewall management to avoid conflicts
+
+## 11. References
+
+- [Manage Windows Firewall with the command line](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/configure-with-command-line) — Complete PowerShell and netsh firewall management reference
+- [Windows Firewall rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules) — Rule precedence, Local Policy Merge documentation
 - [How to configure a firewall for AD domains and trusts](https://learn.microsoft.com/en-us/troubleshoot/windows-server/active-directory/config-firewall-for-ad-domains-and-trusts) — Authoritative AD authentication port list (KB179442)
+- [Windows Firewall tools](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/tools) — GPO processing and registry storage details
+- [Firewall policy for endpoint security in Intune](https://learn.microsoft.com/en-us/mem/intune/protect/endpoint-security-firewall-policy) — Intune firewall policy configuration guide
+- [Firewall CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/firewall-csp) — Intune MDM Firewall CSP detailed reference
