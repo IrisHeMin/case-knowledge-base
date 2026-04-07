@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎲 Idea Roaming</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0f0e17;
+    --surface: #1a1932;
+    --card: #232246;
+    --text: #fffffe;
+    --text-muted: #a7a9be;
+    --text-en: #8889a0;
+    --accent1: #ff6e6c;
+    --accent2: #67c7eb;
+    --accent3: #ffc857;
+    --accent4: #a06cd5;
+    --accent5: #6bcb77;
+    --timer-warn: #ff6e6c;
+    --timer-ok: #6bcb77;
+    --radius: 16px;
+  }
+
+  body {
+    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .en { color: var(--text-en); font-size: .82em; font-weight: 400; display: block; margin-top: 2px; }
+
+  /* ---- floating bg particles ---- */
+  .bg-particles { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+  .bg-particles span {
+    position: absolute; border-radius: 50%;
+    animation: float linear infinite; opacity: .12;
+  }
+  @keyframes float {
+    0%   { transform: translateY(100vh) rotate(0deg); opacity: 0; }
+    10%  { opacity: .12; }
+    90%  { opacity: .12; }
+    100% { transform: translateY(-10vh) rotate(720deg); opacity: 0; }
+  }
+
+  /* ---- layout ---- */
+  .container {
+    position: relative; z-index: 1;
+    max-width: 960px; margin: 0 auto; padding: 36px 24px 60px;
+    display: flex; flex-direction: column; align-items: center; gap: 28px;
+  }
+
+  /* ---- header ---- */
+  .header { text-align: center; }
+  .header h1 {
+    font-size: 3rem; font-weight: 900; letter-spacing: 2px;
+    background: linear-gradient(135deg, var(--accent1), var(--accent3), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer 4s ease-in-out infinite alternate;
+    background-size: 200% 200%;
+  }
+  @keyframes shimmer { 0%{background-position:0% 50%} 100%{background-position:100% 50%} }
+  .header .subtitle { margin-top: 6px; font-size: 1.05rem; color: var(--text-muted); }
+  .header .subtitle-en { font-size: .88rem; color: var(--text-en); margin-top: 2px; }
+
+  /* ---- rules banner ---- */
+  .rules {
+    background: var(--surface); border-radius: var(--radius); padding: 18px 24px;
+    width: 100%; max-width: 760px;
+    border-left: 4px solid var(--accent3);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .rules-row { display: flex; flex-wrap: wrap; gap: 10px 20px; justify-content: center; }
+  .rules .rule { font-size: .9rem; color: var(--text-muted); white-space: nowrap; }
+  .rules .rule em { font-style: normal; color: var(--accent3); }
+  .rules .rules-en { text-align: center; font-size: .78rem; color: var(--text-en); margin-top: 4px; }
+
+  /* ---- category grid ---- */
+  .categories { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; width: 100%; max-width: 760px; }
+  .cat-btn {
+    flex: 1 1 auto; min-width: 160px;
+    padding: 14px 18px; border: 2px solid transparent; border-radius: var(--radius);
+    background: var(--surface); color: var(--text);
+    font-size: .95rem; font-weight: 700; cursor: pointer;
+    transition: all .25s ease; position: relative; overflow: hidden;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center;
+  }
+  .cat-btn .cat-label { display: flex; align-items: center; gap: 8px; }
+  .cat-btn .emoji { font-size: 1.25rem; }
+  .cat-btn .en { font-size: .72rem; }
+  .cat-btn:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .cat-btn.active { border-color: var(--glow); transform: translateY(-3px); box-shadow: 0 0 20px var(--glow-alpha); }
+  .cat-btn:nth-child(1) { --glow: var(--accent1); --glow-alpha: rgba(255,110,108,.3); }
+  .cat-btn:nth-child(2) { --glow: var(--accent2); --glow-alpha: rgba(103,199,235,.3); }
+  .cat-btn:nth-child(3) { --glow: var(--accent4); --glow-alpha: rgba(160,108,213,.3); }
+  .cat-btn:nth-child(4) { --glow: var(--accent3); --glow-alpha: rgba(255,200,87,.3); }
+  .cat-btn:nth-child(5) { --glow: var(--accent5); --glow-alpha: rgba(107,203,119,.3); }
+
+  /* ---- question display ---- */
+  .question-area {
+    width: 100%; max-width: 760px; min-height: 180px;
+    background: var(--card); border-radius: var(--radius);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 32px 28px; text-align: center;
+    position: relative; overflow: hidden;
+    transition: border-color .3s; border: 2px solid transparent;
+  }
+  .question-area.has-glow { border-color: var(--current-glow, var(--accent2)); }
+  .question-area .placeholder { color: var(--text-muted); font-size: 1.05rem; }
+  .question-area .placeholder .arrow { display: block; font-size: 2rem; margin-bottom: 6px; animation: bounce 1.5s infinite; }
+  @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+
+  .question-text {
+    font-size: 1.45rem; font-weight: 700; line-height: 1.6;
+    opacity: 0; transform: scale(.9); transition: all .4s ease;
+  }
+  .question-text.show { opacity: 1; transform: scale(1); }
+
+  .question-hint {
+    margin-top: 14px; font-size: .85rem; color: var(--text-muted);
+    opacity: 0; transition: opacity .4s .2s;
+  }
+  .question-hint.show { opacity: 1; }
+
+  /* ---- action bar (draw + timers) ---- */
+  .action-bar {
+    display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; align-items: flex-start;
+    width: 100%; max-width: 760px;
+  }
+
+  .draw-btn {
+    padding: 16px 40px; border: none; border-radius: 60px;
+    font-size: 1.1rem; font-weight: 700; cursor: pointer;
+    color: var(--bg);
+    background: linear-gradient(135deg, var(--accent1), var(--accent3));
+    box-shadow: 0 6px 24px rgba(255,110,108,.35);
+    transition: all .25s ease; overflow: hidden;
+  }
+  .draw-btn .en { color: rgba(15,14,23,.5); }
+  .draw-btn:disabled { background: var(--surface); color: var(--text-muted); box-shadow: none; cursor: not-allowed; }
+  .draw-btn:disabled .en { color: var(--text-en); }
+  .draw-btn:not(:disabled):hover { transform: translateY(-3px) scale(1.04); box-shadow: 0 10px 32px rgba(255,110,108,.45); }
+  .draw-btn:not(:disabled):active { transform: scale(.97); }
+  .draw-btn.rolling { animation: shake .08s linear infinite; }
+  @keyframes shake { 0%{transform:translateX(-2px) rotate(-1deg)} 50%{transform:translateX(2px) rotate(1deg)} 100%{transform:translateX(-2px) rotate(-1deg)} }
+
+  /* ---- timer cards ---- */
+  .timer-card {
+    background: var(--surface); border-radius: var(--radius); padding: 16px 20px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    min-width: 180px; border: 2px solid transparent; transition: border-color .3s;
+  }
+  .timer-card.active-timer { border-color: var(--accent2); }
+  .timer-card.warning { border-color: var(--timer-warn); }
+  .timer-card .timer-title { font-size: .88rem; font-weight: 700; color: var(--text-muted); text-align: center; }
+  .timer-card .timer-title .en { font-size: .72rem; }
+
+  .timer-display {
+    font-size: 2.4rem; font-weight: 900; font-variant-numeric: tabular-nums;
+    color: var(--timer-ok); transition: color .3s;
+    line-height: 1;
+  }
+  .timer-display.warn { color: var(--timer-warn); animation: pulse .6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+  .timer-btns { display: flex; gap: 6px; }
+  .timer-btn {
+    padding: 6px 14px; border: none; border-radius: 20px;
+    font-size: .82rem; font-weight: 700; cursor: pointer; transition: all .2s;
+    color: var(--text);
+  }
+  .timer-btn.start-btn { background: var(--accent5); color: var(--bg); }
+  .timer-btn.start-btn:hover { background: #56b363; }
+  .timer-btn.pause-btn { background: var(--accent3); color: var(--bg); }
+  .timer-btn.pause-btn:hover { background: #e6b44e; }
+  .timer-btn.reset-btn { background: rgba(255,255,255,.1); }
+  .timer-btn.reset-btn:hover { background: rgba(255,255,255,.2); }
+
+  /* ---- progress bar ---- */
+  .progress-bar {
+    width: 100%; max-width: 760px;
+    display: flex; align-items: center; gap: 12px;
+    opacity: 0; transition: opacity .3s;
+  }
+  .progress-bar.show { opacity: 1; }
+  .progress-track { flex: 1; height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 3px; transition: width .3s, background .3s; background: var(--accent2); }
+  .progress-label { font-size: .85rem; color: var(--text-muted); white-space: nowrap; }
+
+  /* ---- confetti canvas ---- */
+  #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 999; }
+
+  /* ---- footer ---- */
+  .footer { margin-top: 16px; text-align: center; font-size: .8rem; color: var(--text-muted); opacity: .5; }
+
+  /* ---- time-up overlay ---- */
+  .timeup-overlay {
+    display: none; position: fixed; inset: 0; z-index: 900;
+    background: rgba(15,14,23,.7); backdrop-filter: blur(4px);
+    justify-content: center; align-items: center;
+  }
+  .timeup-overlay.show { display: flex; }
+  .timeup-box {
+    background: var(--card); border-radius: var(--radius); padding: 36px 48px;
+    text-align: center; border: 2px solid var(--accent1);
+    animation: popIn .3s ease;
+  }
+  @keyframes popIn { 0%{transform:scale(.8);opacity:0} 100%{transform:scale(1);opacity:1} }
+  .timeup-box h2 { font-size: 1.6rem; margin-bottom: 6px; }
+  .timeup-box .en { font-size: 1rem; margin-bottom: 16px; }
+  .timeup-dismiss {
+    padding: 10px 32px; border: none; border-radius: 30px;
+    background: var(--accent1); color: #fff; font-size: 1rem; font-weight: 700;
+    cursor: pointer; transition: transform .2s;
+  }
+  .timeup-dismiss:hover { transform: scale(1.05); }
+
+  /* responsive */
+  @media (max-width: 640px) {
+    .header h1 { font-size: 2.2rem; }
+    .question-text { font-size: 1.2rem; }
+    .timer-display { font-size: 1.8rem; }
+    .action-bar { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-particles" id="particles"></div>
+<canvas id="confetti"></canvas>
+
+<!-- time-up overlay -->
+<div class="timeup-overlay" id="timeupOverlay">
+  <div class="timeup-box">
+    <h2>⏰ 时间到！</h2>
+    <span class="en">Time's up!</span>
+    <br>
+    <button class="timeup-dismiss" onclick="dismissTimeup()">好的 OK 👍</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- header -->
+  <div class="header">
+    <h1>🎲 Idea Roaming</h1>
+    <p class="subtitle">随机话题 · 轻松分享 · 好奇追问 · 不带评判</p>
+    <p class="subtitle-en">Random Topics · Casual Sharing · Curious Follow-ups · No Judgement</p>
+  </div>
+
+  <!-- rules -->
+  <div class="rules">
+    <div class="rules-row">
+      <span class="rule">🎯 <em>随机抽题</em>，分享 ~3 min</span>
+      <span class="rule">🤔 基于<em>好奇</em>追问（2 min）</span>
+      <span class="rule">⏭️ 无人追问？下一位！</span>
+      <span class="rule">🔒 不涉及隐私 · 轻松有趣</span>
+    </div>
+    <div class="rules-en">🎯 Random draw, share ~3 min &nbsp;·&nbsp; 🤔 Curious follow-ups (2 min) &nbsp;·&nbsp; ⏭️ No questions? Next! &nbsp;·&nbsp; 🔒 No privacy topics · Fun only</div>
+  </div>
+
+  <!-- categories -->
+  <div class="categories" id="categories">
+    <button class="cat-btn" data-cat="0">
+      <span class="cat-label"><span class="emoji">🛒</span>生活 & 购物小技巧</span>
+      <span class="en">Life & Shopping Tips</span>
+    </button>
+    <button class="cat-btn" data-cat="1">
+      <span class="cat-label"><span class="emoji">📚</span>阅读 / 学习 / 信息获取</span>
+      <span class="en">Reading / Learning / Info Tips</span>
+    </button>
+    <button class="cat-btn" data-cat="2">
+      <span class="cat-label"><span class="emoji">👨‍👩‍👧</span>家庭 / 育儿 tips</span>
+      <span class="en">Family / Parenting Tips (Optional)</span>
+    </button>
+    <button class="cat-btn" data-cat="3">
+      <span class="cat-label"><span class="emoji">⚡</span>工作方式 & 日常效率</span>
+      <span class="en">Work Style & Productivity</span>
+    </button>
+    <button class="cat-btn" data-cat="4">
+      <span class="cat-label"><span class="emoji">🧠</span>轻量思维习惯 / 偏好</span>
+      <span class="en">Thinking Habits & Preferences</span>
+    </button>
+  </div>
+
+  <!-- draw button -->
+  <button class="draw-btn" id="drawBtn" disabled>
+    请先选择一个话题分类 👆
+    <span class="en">Pick a category above first</span>
+  </button>
+
+  <!-- question display -->
+  <div class="question-area" id="questionArea">
+    <div class="placeholder" id="placeholder">
+      <span class="arrow">☝️</span>
+      选一个感兴趣的分类，然后点击抽题吧！
+      <span class="en">Choose a category, then draw a question!</span>
+    </div>
+    <div class="question-text" id="questionText"></div>
+    <div class="question-hint" id="questionHint">
+      💡 分享约 3 分钟，其他人可基于好奇追问哦～
+      <span class="en">Share for ~3 min. Others can ask curious follow-ups!</span>
+    </div>
+  </div>
+
+  <!-- action bar: timers -->
+  <div class="action-bar" id="actionBar">
+    <!-- Share Timer (3 min) -->
+    <div class="timer-card" id="shareTimerCard">
+      <div class="timer-title">
+        🎤 分享计时
+        <span class="en">Sharing Timer</span>
+      </div>
+      <div class="timer-display" id="shareTimerDisplay">3:00</div>
+      <div class="timer-btns">
+        <button class="timer-btn start-btn" id="shareStartBtn" onclick="toggleTimer('share')">
+          ▶ 开始 Start
+        </button>
+        <button class="timer-btn reset-btn" onclick="resetTimer('share')">
+          ↻ 重置 Reset
+        </button>
+      </div>
+    </div>
+
+    <!-- Follow-up Timer (2 min) -->
+    <div class="timer-card" id="followupTimerCard">
+      <div class="timer-title">
+        🤔 追问计时
+        <span class="en">Follow-up Timer</span>
+      </div>
+      <div class="timer-display" id="followupTimerDisplay">2:00</div>
+      <div class="timer-btns">
+        <button class="timer-btn start-btn" id="followupStartBtn" onclick="toggleTimer('followup')">
+          ▶ 开始 Start
+        </button>
+        <button class="timer-btn reset-btn" onclick="resetTimer('followup')">
+          ↻ 重置 Reset
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- progress -->
+  <div class="progress-bar" id="progressBar">
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+    <span class="progress-label" id="progressLabel">0 / 0</span>
+  </div>
+
+  <div class="footer">Idea Roaming · Built for fun 🎉</div>
+</div>
+
+<script>
+// ============ QUESTION DATA ============
+const QUESTIONS = [
+  // 0 - 生活 & 购物小技巧
+  [
+    { zh: "你有没有一个「买了之后觉得真香」的东西？为什么推荐？", en: "Ever bought something and thought 'wow, this is great'? What is it and why?" },
+    { zh: "有没有一个省钱的小窍门，你一直在默默用？", en: "Do you have a money-saving trick you've been quietly using?" },
+    { zh: "你日常买菜 / 购物有什么高效策略吗？", en: "Any efficient strategies for your daily grocery shopping?" },
+    { zh: "你用过什么「便宜但超好用」的生活好物？", en: "Any 'cheap but amazing' daily life products you'd recommend?" },
+    { zh: "分享一个让家里更整洁 / 更舒适的小方法？", en: "Share a tip that makes your home tidier or more comfortable?" },
+    { zh: "你有没有一个做饭 / 做菜的小技巧，让效率提升很多？", en: "A cooking trick that significantly boosts your kitchen efficiency?" },
+    { zh: "你是怎么决定「该买还是不该买」一个东西的？", en: "How do you decide whether to buy something or not?" },
+    { zh: "有没有什么生活习惯，坚持之后发现效果意外的好？", en: "A daily habit that turned out surprisingly effective after sticking with it?" },
+    { zh: "你有没有一个「收纳 / 整理」方面的心得？", en: "Any insights on organizing or tidying up?" },
+    { zh: "你出门旅行或出差时，有什么必带的东西或技巧？", en: "Must-haves or travel tips when going on a trip or business travel?" },
+  ],
+  // 1 - 阅读 / 学习 / 信息获取
+  [
+    { zh: "你最近读了什么好书 / 好文章？用一句话推荐一下？", en: "Read any good books or articles recently? One-line recommendation?" },
+    { zh: "你平时主要通过什么渠道获取信息？为什么选这些？", en: "What are your main channels for getting information? Why?" },
+    { zh: "有没有一个你觉得「被低估」的学习方法？", en: "Know an underrated learning method you'd recommend?" },
+    { zh: "你有没有什么管理 RSS / newsletter / 播客的技巧？", en: "Tips for managing RSS feeds, newsletters, or podcasts?" },
+    { zh: "你是怎么决定「这个东西值不值得深入学」的？", en: "How do you decide if something is worth studying deeply?" },
+    { zh: "你有没有一个记笔记 / 做总结的习惯或工具推荐？", en: "Any note-taking habits or tool recommendations?" },
+    { zh: "你怎么避免信息过载？有什么筛选策略吗？", en: "How do you avoid information overload? Any filtering strategy?" },
+    { zh: "推荐一个你最近发现的宝藏 App / 网站 / 工具？", en: "Recommend a hidden-gem app, website, or tool you found recently?" },
+    { zh: "你学一个新技能的时候，一般怎么开始？", en: "How do you usually start when learning a new skill?" },
+    { zh: "你有没有什么「碎片时间学习」的方法？", en: "Any methods for learning during short free moments?" },
+  ],
+  // 2 - 家庭 / 育儿 tips
+  [
+    { zh: "你有没有一个让家庭生活更有仪式感的小方法？", en: "A small way to add more 'ritual' to family life?" },
+    { zh: "如果有孩子，你觉得最有效的沟通方式是什么？", en: "If you have kids, what's the most effective way to communicate with them?" },
+    { zh: "你怎么平衡工作和家庭时间的？有什么小策略？", en: "How do you balance work and family time? Any strategies?" },
+    { zh: "有没有一个让家人之间更好沟通的技巧？", en: "Any tips for better communication among family members?" },
+    { zh: "你觉得什么样的周末活动，全家都很开心？", en: "What kind of weekend activities make the whole family happy?" },
+    { zh: "你有没有和家人一起养成的好习惯？", en: "Any good habits you've built together with your family?" },
+    { zh: "你是怎么处理家庭中「意见不一致」的时刻的？", en: "How do you handle disagreements within the family?" },
+    { zh: "有没有什么你小时候的经历，影响了你现在对家庭的态度？", en: "Any childhood experience that shaped your current attitude toward family?" },
+    { zh: "你会怎么向家人推荐一本书 / 一部电影？", en: "How would you recommend a book or movie to your family?" },
+    { zh: "你有没有一个家庭 / 亲子方面的「失败经验」，后来发现其实是好事？", en: "A family/parenting 'failure' that turned out to be a good thing?" },
+  ],
+  // 3 - 工作方式 & 日常效率
+  [
+    { zh: "你有没有一个提升每日工作效率的小习惯？", en: "A small habit that boosts your daily work productivity?" },
+    { zh: "你是怎么管理你的待办事项 / 任务列表的？", en: "How do you manage your to-do list or task tracker?" },
+    { zh: "你怎么处理「被频繁打断」的工作状态？", en: "How do you handle frequent interruptions at work?" },
+    { zh: "你最喜欢的效率工具是什么？为什么？", en: "What's your favorite productivity tool and why?" },
+    { zh: "你有没有「时间块管理」或类似的方法？效果怎么样？", en: "Do you use time-blocking or similar methods? How's the result?" },
+    { zh: "你开会时有什么技巧让会议更高效？", en: "Any meeting tips that make them more efficient?" },
+    { zh: "你怎么决定一天中「先做什么、后做什么」？", en: "How do you prioritize what to do first vs. later in a day?" },
+    { zh: "你有没有一个帮助自己进入专注状态的方法？", en: "Any method to help you get into a focused state?" },
+    { zh: "当你觉得效率很低的时候，你会怎么调整？", en: "What do you do when you feel unproductive?" },
+    { zh: "你是怎么管理邮件 / 消息 / 通知的？有什么策略吗？", en: "How do you manage emails, messages, and notifications?" },
+  ],
+  // 4 - 轻量思维习惯 / 偏好
+  [
+    { zh: "你做重要决定前，一般会经历怎样的思考过程？", en: "What's your thinking process before making important decisions?" },
+    { zh: "有没有一个思维方式 / 心理模型对你影响很大？", en: "Any mental model or thinking framework that influenced you a lot?" },
+    { zh: "你怎么处理「纠结 / 选择困难」的时刻？", en: "How do you handle moments of indecisiveness?" },
+    { zh: "你有没有一个每天或每周的「复盘 / 反思」习惯？", en: "Do you have a daily or weekly review/reflection habit?" },
+    { zh: "你觉得自己最受益的一个思维习惯是什么？", en: "What thinking habit has benefited you the most?" },
+    { zh: "你是怎么让自己保持好奇心的？", en: "How do you keep yourself curious?" },
+    { zh: "你怎么判断一件事情「值不值得投入时间」？", en: "How do you decide if something is worth your time?" },
+    { zh: "有没有一句话 / 一个观点，改变了你看待事情的方式？", en: "A quote or idea that changed the way you see things?" },
+    { zh: "你会怎么向别人解释一个复杂的概念？有什么技巧？", en: "How do you explain complex concepts to others? Any tricks?" },
+    { zh: "当你感到焦虑或压力大的时候，你一般怎么调节？", en: "How do you manage when feeling anxious or stressed?" },
+  ],
+];
+
+const CAT_COLORS = ['#ff6e6c','#67c7eb','#a06cd5','#ffc857','#6bcb77'];
+
+// ============ STATE ============
+let selectedCat = -1;
+let usedMap = {};
+let currentQuestion = null;
+
+// Timer state
+const timers = {
+  share:    { total: 180, remaining: 180, interval: null, running: false },
+  followup: { total: 120, remaining: 120, interval: null, running: false },
+};
+
+// ============ DOM ============
+const catBtns      = document.querySelectorAll('.cat-btn');
+const drawBtn      = document.getElementById('drawBtn');
+const questionArea  = document.getElementById('questionArea');
+const placeholder   = document.getElementById('placeholder');
+const questionText  = document.getElementById('questionText');
+const questionHint  = document.getElementById('questionHint');
+const progressBar   = document.getElementById('progressBar');
+const progressFill  = document.getElementById('progressFill');
+const progressLabel = document.getElementById('progressLabel');
+const timeupOverlay = document.getElementById('timeupOverlay');
+
+// ============ PARTICLES ============
+(function initParticles() {
+  const c = document.getElementById('particles');
+  for (let i = 0; i < 18; i++) {
+    const s = document.createElement('span');
+    const size = Math.random() * 14 + 6;
+    s.style.width = s.style.height = size + 'px';
+    s.style.left = Math.random() * 100 + '%';
+    s.style.background = CAT_COLORS[Math.floor(Math.random() * CAT_COLORS.length)];
+    s.style.animationDuration = (Math.random() * 20 + 15) + 's';
+    s.style.animationDelay = (Math.random() * 20) + 's';
+    c.appendChild(s);
+  }
+})();
+
+// ============ CATEGORY SELECT ============
+catBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const cat = parseInt(btn.dataset.cat);
+    if (selectedCat === cat) return;
+    selectedCat = cat;
+    catBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    questionArea.style.setProperty('--current-glow', CAT_COLORS[cat]);
+    drawBtn.disabled = false;
+    drawBtn.innerHTML = '🎲 随机抽取问题！<span class="en">Draw a Random Question!</span>';
+    updateProgress();
+  });
+});
+
+// ============ DRAW ============
+drawBtn.addEventListener('click', () => {
+  if (selectedCat < 0) return;
+  if (!usedMap[selectedCat]) usedMap[selectedCat] = new Set();
+  const pool = QUESTIONS[selectedCat];
+  const used = usedMap[selectedCat];
+  if (used.size >= pool.length) used.clear();
+
+  let idx;
+  do { idx = Math.floor(Math.random() * pool.length); } while (used.has(idx));
+  used.add(idx);
+  currentQuestion = pool[idx];
+
+  // Reset both timers on new question
+  resetTimer('share');
+  resetTimer('followup');
+
+  // rolling animation
+  drawBtn.classList.add('rolling');
+  drawBtn.innerHTML = '🎲 抽取中...<span class="en">Drawing...</span>';
+  placeholder.style.display = 'none';
+  questionText.classList.remove('show');
+  questionHint.classList.remove('show');
+  questionArea.classList.remove('has-glow');
+
+  let rollCount = 0;
+  const rollInterval = setInterval(() => {
+    const rIdx = Math.floor(Math.random() * pool.length);
+    const q = pool[rIdx];
+    questionText.innerHTML = q.zh + '<span class="en">' + q.en + '</span>';
+    questionText.classList.add('show');
+    rollCount++;
+    if (rollCount > 8) {
+      clearInterval(rollInterval);
+      questionText.classList.remove('show');
+      setTimeout(() => {
+        questionText.innerHTML = currentQuestion.zh + '<span class="en">' + currentQuestion.en + '</span>';
+        questionText.classList.add('show');
+        questionHint.classList.add('show');
+        questionArea.classList.add('has-glow');
+        drawBtn.classList.remove('rolling');
+        drawBtn.innerHTML = '🎲 再抽一个！<span class="en">Draw Another!</span>';
+        updateProgress();
+        fireConfetti();
+      }, 120);
+    }
+  }, 80);
+});
+
+// ============ PROGRESS ============
+function updateProgress() {
+  if (selectedCat < 0) return;
+  const total = QUESTIONS[selectedCat].length;
+  const done = usedMap[selectedCat] ? usedMap[selectedCat].size : 0;
+  progressBar.classList.add('show');
+  progressFill.style.width = (done / total * 100) + '%';
+  progressFill.style.background = CAT_COLORS[selectedCat];
+  progressLabel.textContent = done + ' / ' + total;
+}
+
+// ============ TIMER LOGIC ============
+function formatTime(secs) {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function updateTimerDisplay(name) {
+  const t = timers[name];
+  const display = document.getElementById(name + 'TimerDisplay');
+  const card = document.getElementById(name + 'TimerCard');
+  display.textContent = formatTime(t.remaining);
+
+  // warning when <= 30s
+  if (t.remaining <= 30 && t.running) {
+    display.classList.add('warn');
+    card.classList.add('warning');
+    card.classList.remove('active-timer');
+  } else if (t.running) {
+    display.classList.remove('warn');
+    card.classList.add('active-timer');
+    card.classList.remove('warning');
+  } else {
+    display.classList.remove('warn');
+    card.classList.remove('active-timer');
+    card.classList.remove('warning');
+  }
+}
+
+function toggleTimer(name) {
+  const t = timers[name];
+  const btn = document.getElementById(name + 'StartBtn');
+
+  if (t.running) {
+    // pause
+    clearInterval(t.interval);
+    t.running = false;
+    btn.className = 'timer-btn start-btn';
+    btn.textContent = '▶ 继续 Resume';
+    updateTimerDisplay(name);
+  } else {
+    // start / resume
+    if (t.remaining <= 0) {
+      t.remaining = t.total;
+    }
+    t.running = true;
+    btn.className = 'timer-btn pause-btn';
+    btn.textContent = '⏸ 暂停 Pause';
+    updateTimerDisplay(name);
+
+    t.interval = setInterval(() => {
+      t.remaining--;
+      updateTimerDisplay(name);
+      if (t.remaining <= 0) {
+        clearInterval(t.interval);
+        t.running = false;
+        btn.className = 'timer-btn start-btn';
+        btn.textContent = '▶ 开始 Start';
+        updateTimerDisplay(name);
+        showTimeup();
+      }
+    }, 1000);
+  }
+}
+
+function resetTimer(name) {
+  const t = timers[name];
+  clearInterval(t.interval);
+  t.running = false;
+  t.remaining = t.total;
+  const btn = document.getElementById(name + 'StartBtn');
+  btn.className = 'timer-btn start-btn';
+  btn.textContent = '▶ 开始 Start';
+  updateTimerDisplay(name);
+}
+
+function showTimeup() {
+  timeupOverlay.classList.add('show');
+}
+
+function dismissTimeup() {
+  timeupOverlay.classList.remove('show');
+}
+
+// ============ CONFETTI ============
+const confettiCanvas = document.getElementById('confetti');
+const ctx = confettiCanvas.getContext('2d');
+let particles = [];
+let animFrame;
+
+function resizeCanvas() {
+  confettiCanvas.width = window.innerWidth;
+  confettiCanvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+function fireConfetti() {
+  particles = [];
+  for (let i = 0; i < 60; i++) {
+    particles.push({
+      x: confettiCanvas.width / 2 + (Math.random() - .5) * 200,
+      y: confettiCanvas.height / 2,
+      vx: (Math.random() - .5) * 14,
+      vy: -(Math.random() * 12 + 4),
+      w: Math.random() * 8 + 4,
+      h: Math.random() * 6 + 3,
+      color: CAT_COLORS[Math.floor(Math.random() * CAT_COLORS.length)],
+      rot: Math.random() * 360,
+      rv: (Math.random() - .5) * 12,
+      life: 1,
+    });
+  }
+  if (!animFrame) animateConfetti();
+}
+
+function animateConfetti() {
+  ctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  particles.forEach(p => {
+    p.x += p.vx; p.y += p.vy; p.vy += .35; p.rot += p.rv; p.life -= .012;
+    if (p.life <= 0) return;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot * Math.PI / 180);
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    ctx.restore();
+  });
+  particles = particles.filter(p => p.life > 0);
+  if (particles.length > 0) {
+    animFrame = requestAnimationFrame(animateConfetti);
+  } else {
+    animFrame = null;
+    ctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  }
+}
+</script>
+</body>
+</html>
