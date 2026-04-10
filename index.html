@@ -87,6 +87,7 @@ title: Home
 {% assign tsg_count = 0 %}
 {% assign econ_count = 0 %}
 {% assign tutorial_count = 0 %}
+{% assign vc_count = 0 %}
 {% for post in site.posts %}
   {% if post.path contains "case-summaries/" %}{% assign case_count = case_count | plus: 1 %}
   {% elsif post.path contains "deep-dive/" %}{% assign deep_count = deep_count | plus: 1 %}
@@ -96,6 +97,7 @@ title: Home
   {% elsif post.path contains "economics-education/" %}{% assign econ_count = econ_count | plus: 1 %}
   {% elsif post.path contains "tsg/" %}{% assign tsg_count = tsg_count | plus: 1 %}
   {% elsif post.path contains "tutorials/" %}{% assign tutorial_count = tutorial_count | plus: 1 %}
+  {% elsif post.path contains "video-courses/" %}{% assign vc_count = vc_count | plus: 1 %}
   {% endif %}
 {% endfor %}
 
@@ -148,6 +150,14 @@ title: Home
     <h3>Tutorials</h3>
     <p>Step-by-step tutorials for building projects from scratch with detailed explanations</p>
     <span class="card-count">{{ tutorial_count }} posts</span>
+  </a>
+  {% endif %}
+  {% if vc_count > 0 %}
+  <a href="{{ '/video-courses/' | relative_url }}" class="category-card">
+    <div class="card-icon">🎬</div>
+    <h3>Video Courses</h3>
+    <p>Windows 网络技术系列视频课程，故事驱动，从场景出发深入每个技术</p>
+    <span class="card-count">{{ vc_count }} episodes</span>
   </a>
   {% endif %}
 </section>
